@@ -23,16 +23,9 @@ secondaryBackgroundColor = "#f0f2f6"
 textColor = "#262730"
 font = "sans serif"
 
-[client]
-# Client configuration
-caching = true
-displayEnabled = true
-
 [runner]
 # Runner configuration
 magicEnabled = true
-installTracer = false
-fixMatplotlib = true
 
 [logger]
 # Logger configuration
