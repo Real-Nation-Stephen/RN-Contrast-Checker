@@ -1,0 +1,11 @@
+streamlit>=1.31.0
+Pillow>=11.2.1
+PyMuPDF>=1.23.0
+colormath>=3.0.0
+numpy>=2.2.6
+matplotlib>=3.10.3
+fpdf>=1.7.2
+pandas>=2.2.2
+gspread>=5.12.0
+google-auth>=2.23.0
+# External CLI dependency (install via Homebrew or apt): mupdf-tools (provides `mutool` for stroke outlining) 
