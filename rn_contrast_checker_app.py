@@ -494,8 +494,8 @@ st.sidebar.markdown("""
 """, unsafe_allow_html=True)
 
 # Logo handling - always use Studio Mode
-logo_sparkle_path = "assets/logo sparkle.png"
-logo_studio_path = "assets/logo studio.png"
+logo_sparkle_path = "assets/Logo Sparkle.png"
+logo_studio_path = "assets/Logo Studio.png"
 
 with open(logo_sparkle_path, "rb") as f:
     logo_sparkle_base64 = base64.b64encode(f.read()).decode()
