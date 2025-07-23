@@ -39,96 +39,97 @@ ENABLE_STROKE_OUTLINE = False
 # =====================================================================================
 
 def load_users_from_sheet():
-    """Load users from Google Sheets"""
+    """Load users from Google Sheets with better error handling"""
+    
     try:
-        # Check if we have the required secrets
-        if (hasattr(st, 'secrets') and 
-            st.secrets.get("private_key_id") and 
-            st.secrets.get("private_key") and 
-            st.secrets.get("client_id") and
-            "your_private_key_id_here" not in str(st.secrets.get("private_key_id", ""))):
+        # Check if we have the required secrets (try both locations)
+        service_account = getattr(st.secrets, 'service_account', None)
+        if service_account or (hasattr(st, 'secrets') and st.secrets.get("private_key_id")):
             
-            import gspread
-            from google.oauth2.service_account import Credentials
+            # Use service_account section if available, otherwise root level
+            if service_account:
+                private_key_id = service_account.get("private_key_id", "")
+                private_key = service_account.get("private_key", "")
+                client_id = service_account.get("client_id", "")
+            else:
+                private_key_id = st.secrets.get("private_key_id", "")
+                private_key = st.secrets.get("private_key", "")
+                client_id = st.secrets.get("client_id", "")
             
-            # Define the scope
-            scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-            
-            # Service account credentials
-            credentials_info = {
-                "type": "service_account",
-                "project_id": "rn-copy-checker-app",
-                "private_key_id": st.secrets.get("private_key_id", ""),
-                "private_key": st.secrets.get("private_key", "").replace('\\n', '\n'),
-                "client_email": "rn-copy-checker@rn-copy-checker-app.iam.gserviceaccount.com",
-                "client_id": st.secrets.get("client_id", ""),
-                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-                "token_uri": "https://oauth2.googleapis.com/token",
-                "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
-                "client_x509_cert_url": f"https://www.googleapis.com/robot/v1/metadata/x509/rn-copy-checker%40rn-copy-checker-app.iam.gserviceaccount.com"
-            }
-            
-            # Create credentials
-            credentials = Credentials.from_service_account_info(credentials_info, scopes=scope)
-            
-            # Authorize the client
-            client = gspread.authorize(credentials)
-            
-            # Open the Google Sheet
-            sheet = client.open_by_url("https://docs.google.com/spreadsheets/d/1nLOJvUut6RgfYbsSQa1ghPnJMaUWdHbbvlWqSDwwmU4/edit?usp=sharing")
-            worksheet = sheet.get_worksheet(0)  # Get first worksheet
-            
-            # Get all records
-            records = worksheet.get_all_records()
-            
-            # Convert to dictionary with name as key
-            users = {}
-            for record in records:
-                if record.get('Name') and record.get('Password'):
-                    # Try different possible column names for the image URL
-                    image_url = (record.get('Profile Image', '') or 
-                               record.get('Image', '') or 
-                               record.get('Photo', '') or 
-                               record.get('Picture', '') or
-                               record.get('Image URL', '') or '')
-                    
-                    users[record['Name']] = {
-                        'email': record.get('Email', ''),
-                        'password': record.get('Password', ''),
-                        'image_url': image_url.strip() if image_url else ''
-                    }
-            
-            if users:
-                return users
-        
-        # Fallback to hardcoded users (Google Sheets connection failed)
-        # This is only shown if there's an actual error - credentials are configured
-        
-        return {
-            "Stephen Maguire": {"email": "stephen.maguire@realnation.ie", "password": "RealSpark2025", "image_url": ""},
-            "Kay McKeon": {"email": "kay.mckeon@realnation.ie", "password": "RealNest2025", "image_url": ""},
-            "Gráinne O'Sullivan": {"email": "grainne.osullivan@realnation.ie", "password": "RealBolt2025", "image_url": ""},
-            "Dan Vaughan": {"email": "dan.vaughan@realnation.ie", "password": "RealPath2025", "image_url": ""},
-            "Craig Thiel": {"email": "craig.thiel@realnation.ie", "password": "RealGrid2025", "image_url": ""},
-            "Design freelancer 3": {"email": "designfreelancer3@realnation.ie", "password": "RealCore2025", "image_url": ""},
-            "Design freelancer 2": {"email": "designfreelancer2@realnation.ie", "password": "RealLink2025", "image_url": ""},
-            "Design freelancer 1": {"email": "designfreelancer1@realnation.ie", "password": "RealDrift2025", "image_url": ""},
-            "Gwen Robinson": {"email": "gwen.robinson@realnation.ie", "password": "RealWeb2025", "image_url": ""}
-        }
+            # Check if we have valid credentials
+            if (private_key_id and private_key and client_id and
+                "your_private_key_id_here" not in str(private_key_id)):
+                
+                import gspread
+                from google.oauth2.service_account import Credentials
+                
+                # Define the scope
+                scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+                
+                # Service account credentials
+                credentials_info = {
+                    "type": "service_account",
+                    "project_id": "rn-copy-checker-app",
+                    "private_key_id": private_key_id,
+                    "private_key": private_key.replace('\\n', '\n'),
+                    "client_email": "rn-copy-checker@rn-copy-checker-app.iam.gserviceaccount.com",
+                    "client_id": client_id,
+                    "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                    "token_uri": "https://oauth2.googleapis.com/token",
+                    "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+                    "client_x509_cert_url": f"https://www.googleapis.com/robot/v1/metadata/x509/rn-copy-checker%40rn-copy-checker-app.iam.gserviceaccount.com"
+                }
+                
+                # Create credentials
+                credentials = Credentials.from_service_account_info(credentials_info, scopes=scope)
+                
+                # Authorize the client
+                client = gspread.authorize(credentials)
+                
+                # Open the Google Sheet
+                sheet = client.open_by_url("https://docs.google.com/spreadsheets/d/1nLOJvUut6RgfYbsSQa1ghPnJMaUWdHbbvlWqSDwwmU4/edit?usp=sharing")
+                worksheet = sheet.get_worksheet(0)  # Get first worksheet
+                
+                # Get all records
+                records = worksheet.get_all_records()
+                
+                # Convert to dictionary with name as key
+                users = {}
+                for record in records:
+                    if record.get('Name') and record.get('Password'):
+                        # Try different possible column names for the image URL
+                        image_url = (record.get('Profile Image', '') or 
+                                   record.get('Image', '') or 
+                                   record.get('Photo', '') or 
+                                   record.get('Picture', '') or
+                                   record.get('Image URL', '') or '')
+                        
+                        users[record['Name']] = {
+                            'email': record.get('Email', ''),
+                            'password': record.get('Password', ''),
+                            'image_url': image_url.strip() if image_url else ''
+                        }
+                
+                if users:
+                    return users
         
     except Exception as e:
-        # Return fallback users if anything fails
-        return {
-            "Stephen Maguire": {"email": "stephen.maguire@realnation.ie", "password": "RealSpark2025", "image_url": ""},
-            "Kay McKeon": {"email": "kay.mckeon@realnation.ie", "password": "RealNest2025", "image_url": ""},
-            "Gráinne O'Sullivan": {"email": "grainne.osullivan@realnation.ie", "password": "RealBolt2025", "image_url": ""},
-            "Dan Vaughan": {"email": "dan.vaughan@realnation.ie", "password": "RealPath2025", "image_url": ""},
-            "Craig Thiel": {"email": "craig.thiel@realnation.ie", "password": "RealGrid2025", "image_url": ""},
-            "Design freelancer 3": {"email": "designfreelancer3@realnation.ie", "password": "RealCore2025", "image_url": ""},
-            "Design freelancer 2": {"email": "designfreelancer2@realnation.ie", "password": "RealLink2025", "image_url": ""},
-            "Design freelancer 1": {"email": "designfreelancer1@realnation.ie", "password": "RealDrift2025", "image_url": ""},
-            "Gwen Robinson": {"email": "gwen.robinson@realnation.ie", "password": "RealWeb2025", "image_url": ""}
-        }
+        # Show warning in the UI only during login attempts
+        if 'authenticated' not in st.session_state or not st.session_state.authenticated:
+            st.warning(f"⚠️ Google Sheets connection failed: {str(e)[:100]}... Using offline user list.")
+    
+    # Fallback to hardcoded users
+    return {
+        "Stephen Maguire": {"email": "stephen.maguire@realnation.ie", "password": "RealSpark2025", "image_url": ""},
+        "Kay McKeon": {"email": "kay.mckeon@realnation.ie", "password": "RealNest2025", "image_url": ""},
+        "Gráinne O'Sullivan": {"email": "grainne.osullivan@realnation.ie", "password": "RealBolt2025", "image_url": ""},
+        "Dan Vaughan": {"email": "dan.vaughan@realnation.ie", "password": "RealPath2025", "image_url": ""},
+        "Craig Thiel": {"email": "craig.thiel@realnation.ie", "password": "RealGrid2025", "image_url": ""},
+        "Design freelancer 3": {"email": "designfreelancer3@realnation.ie", "password": "RealCore2025", "image_url": ""},
+        "Design freelancer 2": {"email": "designfreelancer2@realnation.ie", "password": "RealLink2025", "image_url": ""},
+        "Design freelancer 1": {"email": "designfreelancer1@realnation.ie", "password": "RealDrift2025", "image_url": ""},
+        "Gwen Robinson": {"email": "gwen.robinson@realnation.ie", "password": "RealWeb2025", "image_url": ""}
+    }
 
 def convert_google_drive_url(url):
     """Convert Google Drive sharing URLs to direct image URLs"""
