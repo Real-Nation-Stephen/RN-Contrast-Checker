@@ -325,7 +325,7 @@ def show_login():
             login_button = st.form_submit_button(
                 "🚀 Sign In", 
                 type="primary", 
-                use_container_width=True
+                width='stretch'
             )
             
             if login_button:
@@ -447,14 +447,17 @@ def clear_analysis_data():
         'pdf_results', 
         'text_blocks_by_page',
         'contrast_df',
-        'current_file_hash'
+        'current_file_hash',
+        'results_in_sheets',
+        'results_sheet_hash'
     ]
     for key in data_keys:
         if key in st.session_state:
             del st.session_state[key]
-    # Force garbage collection
+    # Force garbage collection multiple times to ensure cleanup
     import gc
     gc.collect()
+    gc.collect()  # Second pass for cyclic references
 
 def save_results_to_sheets(contrast_results, pdf_results, file_hash, user_email=None):
     """Optionally save results to Google Sheets instead of keeping in memory"""
@@ -950,7 +953,7 @@ class ColorDetector:
             # Get colors that are significantly different from background
             bg_sum = sum(bg_color)
             colors = []
-            for c in img.getdata():
+            for c in img.get_flattened_data():
                 r, g, b = c
                 r, g, b = r/255.0, g/255.0, b/255.0
                 if abs(r + g + b - bg_sum) > 0.3:  # Threshold for difference
@@ -1108,7 +1111,7 @@ class ColorDetector:
             candidates = []
             # Simple RGB manhattan distance threshold – skips anti-aliased glyph
             # edges but captures fully background pixels.
-            for r, g, b in img.getdata():
+            for r, g, b in img.get_flattened_data():
                 if abs(r - txt[0]) + abs(g - txt[1]) + abs(b - txt[2]) > 50:
                     candidates.append([r / 255, g / 255, b / 255])
 
@@ -1650,7 +1653,7 @@ def display_results(contrast_results, pdf_results):
                     'Font Size': f"{block.get('font_size', 12):.1f}pt",
                     'WCAG AAA': '✅' if block.get('passes_aaa', False) else '❌'
                 })
-            st.dataframe(data, use_container_width=True)
+            st.dataframe(data, width='stretch')
 
         with tab2:
             pages = {}
@@ -2163,11 +2166,39 @@ if uploaded_file is not None:
                     # Get overall results
                     contrast_results, pdf_results = check_color_contrast(doc)
 
+                    # Limit data size to prevent memory issues (keep only essential data)
+                    # For very large documents, truncate text blocks to prevent memory overflow
+                    MAX_TEXT_BLOCKS_PER_PAGE = 500  # Limit blocks per page
+                    MAX_TOTAL_BLOCKS = 5000  # Limit total blocks across all pages
+                    
+                    total_blocks = sum(len(blocks) for blocks in text_blocks_by_page.values())
+                    if total_blocks > MAX_TOTAL_BLOCKS:
+                        # Truncate oldest pages first
+                        sorted_pages = sorted(text_blocks_by_page.items())
+                        text_blocks_by_page = {}
+                        remaining_blocks = 0
+                        for page_num, blocks in sorted_pages:
+                            if remaining_blocks + len(blocks) <= MAX_TOTAL_BLOCKS:
+                                # Limit blocks per page
+                                text_blocks_by_page[page_num] = blocks[:MAX_TEXT_BLOCKS_PER_PAGE]
+                                remaining_blocks += len(text_blocks_by_page[page_num])
+                            else:
+                                # Add partial page if we have room
+                                remaining = MAX_TOTAL_BLOCKS - remaining_blocks
+                                if remaining > 0:
+                                    text_blocks_by_page[page_num] = blocks[:min(remaining, MAX_TEXT_BLOCKS_PER_PAGE)]
+                                break
+                        st.warning(f"⚠️ Document has {total_blocks} text blocks. Limited to {MAX_TOTAL_BLOCKS} to prevent memory issues.")
+
                     # Cache results in session state
                     st.session_state.contrast_results = contrast_results
                     st.session_state.pdf_results = pdf_results
                     st.session_state.text_blocks_by_page = text_blocks_by_page
                     st.session_state.current_file_hash = current_hash
+                    
+                    # Force garbage collection after storing large data
+                    import gc
+                    gc.collect()
 
                     # Optionally save backup to Google Sheets (archive feature)
                     use_sheets = st.session_state.get('use_sheets_storage', False)
@@ -2845,7 +2876,7 @@ if show_heatmap:
                     try:
                         overlay_image = create_contrast_overlay(page, text_blocks)
                         with col:
-                            st.image(overlay_image, caption=f"Page {page_num + 1}", use_container_width=True)
+                            st.image(overlay_image, caption=f"Page {page_num + 1}", width='stretch')
                     except Exception as preview_err:
                         st.write(f"Preview error on page {page_num+1}: {preview_err}")
             preview_progress.empty()
