@@ -351,6 +351,36 @@ def show_login():
 
 def check_authentication():
     """Check if user is authenticated"""
+    # Skip authentication when running locally
+    import os
+    is_local = os.getenv('STREAMLIT_SKIP_AUTH', '').lower() == 'true'
+    
+    # Also check if we're likely running locally (no secrets or localhost)
+    if not is_local:
+        try:
+            # Try to detect if we're on Streamlit Cloud (has specific config)
+            # If secrets don't exist or we're clearly local, skip auth
+            if not hasattr(st, 'secrets') or not st.secrets:
+                is_local = True
+            # Check if running via localhost (common local setup)
+            import socket
+            hostname = socket.gethostname()
+            if 'localhost' in hostname.lower() or hostname.startswith('127.'):
+                is_local = True
+        except:
+            # If we can't determine, assume local for safety
+            is_local = True
+    
+    if is_local:
+        # Auto-authenticate for local development
+        if 'authenticated' not in st.session_state or not st.session_state.authenticated:
+            st.session_state.authenticated = True
+            st.session_state.current_user = "Local Developer"
+            st.session_state.user_email = "local@localhost"
+            st.session_state.user_image = ""
+        return True
+    
+    # Normal authentication check for production
     if 'authenticated' not in st.session_state:
         st.session_state.authenticated = False
     
@@ -406,12 +436,139 @@ def show_logout_button():
 # END AUTHENTICATION SYSTEM
 # =====================================================================================
 
+# =====================================================================================
+# MEMORY MANAGEMENT FUNCTIONS
+# =====================================================================================
+
+def clear_analysis_data():
+    """Clear all analysis-related data from session state to free memory"""
+    data_keys = [
+        'contrast_results',
+        'pdf_results', 
+        'text_blocks_by_page',
+        'contrast_df',
+        'current_file_hash'
+    ]
+    for key in data_keys:
+        if key in st.session_state:
+            del st.session_state[key]
+    # Force garbage collection
+    import gc
+    gc.collect()
+
+def save_results_to_sheets(contrast_results, pdf_results, file_hash, user_email=None):
+    """Optionally save results to Google Sheets instead of keeping in memory"""
+    try:
+        service_account = getattr(st.secrets, 'service_account', None)
+        if not service_account and not hasattr(st, 'secrets'):
+            return False
+        
+        if service_account:
+            private_key_id = service_account.get("private_key_id", "")
+            private_key = service_account.get("private_key", "")
+        else:
+            private_key_id = st.secrets.get("private_key_id", "")
+            private_key = st.secrets.get("private_key", "")
+        
+        if not private_key_id or "your_private_key_id_here" in str(private_key_id):
+            return False
+        
+        import gspread
+        from google.oauth2.service_account import Credentials
+        from gspread.exceptions import APIError
+        
+        scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+        credentials_info = {
+            "type": "service_account",
+            "project_id": "rn-copy-checker-app",
+            "private_key_id": private_key_id,
+            "private_key": private_key.replace('\\n', '\n'),
+            "client_email": "rn-copy-checker@rn-copy-checker-app.iam.gserviceaccount.com",
+            "client_id": st.secrets.get("client_id", ""),
+            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+            "token_uri": "https://oauth2.googleapis.com/token",
+            "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+            "client_x509_cert_url": f"https://www.googleapis.com/robot/v1/metadata/x509/rn-copy-checker%40rn-copy-checker-app.iam.gserviceaccount.com"
+        }
+        
+        credentials = Credentials.from_service_account_info(credentials_info, scopes=scope)
+        client = gspread.authorize(credentials)
+        
+        # Try to open results sheet (create if doesn't exist)
+        try:
+            sheet = client.open("RN_Contrast_Checker_Results")
+        except APIError as e:
+            # Check if it's a quota error
+            if '403' in str(e) and ('quota' in str(e).lower() or 'storage' in str(e).lower()):
+                # Disable Google Sheets storage option permanently for this session
+                st.session_state['use_sheets_storage'] = False
+                st.session_state['sheets_quota_exceeded'] = True
+                st.error("⚠️ Google Drive storage quota exceeded. Google Sheets archiving has been disabled. Results will be stored in memory only. Please free up Google Drive space or upgrade your storage plan.")
+                return False
+            # Try to create if it doesn't exist (but this might also fail with quota)
+            try:
+                sheet = client.create("RN_Contrast_Checker_Results")
+                sheet.share("", perm_type='anyone', role='writer')
+            except APIError as create_error:
+                if '403' in str(create_error) and ('quota' in str(create_error).lower() or 'storage' in str(create_error).lower()):
+                    st.session_state['use_sheets_storage'] = False
+                    st.session_state['sheets_quota_exceeded'] = True
+                    st.error("⚠️ Google Drive storage quota exceeded. Google Sheets archiving has been disabled.")
+                    return False
+                raise
+        except Exception as e:
+            # Other errors - just return False without disabling
+            return False
+        
+        worksheet_name = f"Results_{file_hash[:8]}"
+        try:
+            worksheet = sheet.worksheet(worksheet_name)
+            worksheet.clear()
+        except:
+            try:
+                worksheet = sheet.add_worksheet(title=worksheet_name, rows=1000, cols=20)
+            except APIError as e:
+                if '403' in str(e) and ('quota' in str(e).lower() or 'storage' in str(e).lower()):
+                    st.session_state['use_sheets_storage'] = False
+                    st.session_state['sheets_quota_exceeded'] = True
+                    st.error("⚠️ Google Drive storage quota exceeded. Google Sheets archiving has been disabled.")
+                    return False
+                raise
+        
+        # Flatten and save results
+        flat_results = _flatten_results(contrast_results)
+        if flat_results:
+            df = pd.DataFrame(flat_results)
+            try:
+                worksheet.update([df.columns.values.tolist()] + df.values.tolist())
+            except APIError as e:
+                if '403' in str(e) and ('quota' in str(e).lower() or 'storage' in str(e).lower()):
+                    st.session_state['use_sheets_storage'] = False
+                    st.session_state['sheets_quota_exceeded'] = True
+                    st.error("⚠️ Google Drive storage quota exceeded. Google Sheets archiving has been disabled.")
+                    return False
+                raise
+        
+        return True
+    except Exception as e:
+        # Check if it's a quota error
+        error_str = str(e).lower()
+        if '403' in str(e) and ('quota' in error_str or 'storage' in error_str):
+            st.session_state['use_sheets_storage'] = False
+            st.session_state['sheets_quota_exceeded'] = True
+            st.error("⚠️ Google Drive storage quota exceeded. Google Sheets archiving has been disabled. Results will be stored in memory only.")
+        else:
+            # Other errors - show warning but don't disable
+            st.warning(f"Could not save to Google Sheets: {str(e)[:100]}")
+        return False
+
 # Initialize session state variables
 SESSION_STATE_VARS = {
     'contrast_results': None,
     'pdf_results': None,
     'text_blocks_by_page': None,
-    'current_file_hash': None
+    'current_file_hash': None,
+    'use_sheets_storage': False  # Toggle for Google Sheets storage
 }
 
 # Initialize all session state variables at once
@@ -433,8 +590,18 @@ st.set_page_config(
 if not check_authentication():
     st.stop()  # Stop execution if not authenticated
 
-# Show logout button in sidebar
-show_logout_button()
+# Show logout button in sidebar (skip on local)
+import os
+is_local = os.getenv('STREAMLIT_SKIP_AUTH', '').lower() == 'true'
+if not is_local:
+    try:
+        if not hasattr(st, 'secrets') or not st.secrets:
+            is_local = True
+    except:
+        is_local = True
+
+if not is_local:
+    show_logout_button()
 
 # =====================================================================================
 # MAIN APPLICATION (Only accessible after authentication)
@@ -446,6 +613,30 @@ st.markdown("""
 This tool analyzes PDF documents for color contrast accessibility according to WCAG 2.1 guidelines.
 Upload a PDF to check if the text meets contrast requirements for readability.
 """)
+
+# Add memory management options in sidebar
+with st.sidebar:
+    st.markdown("### ⚙️ Memory Settings")
+    
+    # Check if quota was exceeded
+    quota_exceeded = st.session_state.get('sheets_quota_exceeded', False)
+    if quota_exceeded:
+        st.error("⚠️ Google Sheets storage unavailable (quota exceeded)")
+        st.info("💡 Results will be stored in memory. Use 'Clear All Analysis Data' to free memory.")
+        use_sheets_storage = False
+        st.session_state['use_sheets_storage'] = False
+    else:
+        use_sheets_storage = st.checkbox(
+            "💾 Use Google Sheets for data storage (reduces memory usage)",
+            value=st.session_state.get('use_sheets_storage', False),
+            help="When enabled, analysis results are saved to Google Sheets instead of keeping in memory. This helps prevent memory issues on Streamlit Cloud."
+        )
+        st.session_state['use_sheets_storage'] = use_sheets_storage
+    
+    if st.button("🗑️ Clear All Analysis Data", help="Manually clear cached analysis data to free memory"):
+        clear_analysis_data()
+        st.success("Analysis data cleared!")
+        st.rerun()
 
 # Add file uploader
 uploaded_file = st.file_uploader("Upload PDF file", type="pdf", label_visibility="collapsed")
@@ -1900,6 +2091,15 @@ if uploaded_file is not None:
             need_rescan = (st.session_state.current_file_hash != current_hash or
                           st.session_state.contrast_results is None)
 
+            # Clear old data if this is a new file (different hash)
+            if need_rescan and st.session_state.current_file_hash is not None:
+                # Clear old analysis data to free memory before processing new file
+                clear_analysis_data()
+                # Re-initialize session state variables
+                for var, default_value in SESSION_STATE_VARS.items():
+                    if var not in st.session_state:
+                        st.session_state[var] = default_value
+
             if need_rescan:
                 try:
                     doc = fitz.open(stream=file_bytes, filetype="pdf")
@@ -1963,12 +2163,21 @@ if uploaded_file is not None:
                     # Get overall results
                     contrast_results, pdf_results = check_color_contrast(doc)
 
-                    # Cache results
+                    # Cache results in session state
                     st.session_state.contrast_results = contrast_results
                     st.session_state.pdf_results = pdf_results
                     st.session_state.text_blocks_by_page = text_blocks_by_page
                     st.session_state.current_file_hash = current_hash
 
+                    # Optionally save backup to Google Sheets (archive feature)
+                    use_sheets = st.session_state.get('use_sheets_storage', False)
+                    quota_exceeded = st.session_state.get('sheets_quota_exceeded', False)
+                    if use_sheets and not quota_exceeded:
+                        user_email = st.session_state.get('user_email', '')
+                        if save_results_to_sheets(contrast_results, pdf_results, current_hash, user_email):
+                            st.info("💾 Results archived to Google Sheets.")
+                        # Note: If save fails due to quota, the function will disable the option and show error
+                    
                     # -----------------------------------------------------
                     # Make flattened results available for other UI modules
                     # -----------------------------------------------------
@@ -2005,17 +2214,19 @@ if uploaded_file is not None:
                         st.session_state["contrast_df"] = pd.DataFrame()
                         st.warning(f"Could not rebuild contrast_df from cache: {_cdf_err}")
 
-            # Rebuild text_blocks_by_page from contrast_results to ensure consistency
-            contrast_results_flat = _flatten_results(contrast_results)
-            text_blocks_by_page = defaultdict(list)
-            for blk in contrast_results_flat:
-                if not blk.get('bbox'):
-                    continue
-                page_idx = max(blk.get('page', 1) - 1, 0)
-                text_blocks_by_page[page_idx].append(blk)
-
-            # Store back to session for reuse
-            st.session_state['text_blocks_by_page'] = text_blocks_by_page
+            # Only rebuild text_blocks_by_page if not already stored (avoid duplication)
+            if 'text_blocks_by_page' not in st.session_state or st.session_state['text_blocks_by_page'] is None:
+                contrast_results_flat = _flatten_results(contrast_results)
+                text_blocks_by_page = defaultdict(list)
+                for blk in contrast_results_flat:
+                    if not blk.get('bbox'):
+                        continue
+                    page_idx = max(blk.get('page', 1) - 1, 0)
+                    text_blocks_by_page[page_idx].append(blk)
+                # Store back to session for reuse
+                st.session_state['text_blocks_by_page'] = text_blocks_by_page
+            else:
+                text_blocks_by_page = st.session_state.get('text_blocks_by_page', {})
 
             # Create a columns layout for the download buttons
             st.markdown("### Download Reports")
