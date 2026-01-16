@@ -2319,19 +2319,14 @@ if uploaded_file is not None:
             # Display contrast results
             display_results(contrast_results, pdf_results)
             
-            # After all reports and displays are done, aggressively clear memory
-            # Clear the large file_bytes from session state (we've processed everything we need)
+            # AGGRESSIVE MEMORY CLEARING: Clear all detailed data after display
+            # This is critical for Streamlit Cloud memory limits
+            # User can re-upload the same file if they need to see details again
             if '_temp_file_bytes' in st.session_state:
                 del st.session_state['_temp_file_bytes']
             
-            # Force aggressive garbage collection after processing
-            import gc
-            gc.collect()
-            gc.collect()
-            
-            # Note: We keep contrast_results, pdf_results, text_blocks_by_page, and contrast_df
-            # in session state for user interaction (viewing, re-downloading reports, etc.)
-            # These are cleared automatically when a new file is uploaded or user clicks clear button
+            # Mark that we've displayed results - clear detailed data after color-pair section
+            st.session_state['_results_displayed'] = True
 
             # -------------------- Debug download (page-1 results) ---------------------
             try:
@@ -2851,8 +2846,10 @@ def _rgb_float_to_int(rgb_f):
     return tuple(max(0, min(255, int(round(c * 255)))) for c in rgb_f)
 
 # Generate colour-pair summary table for download (CSV)
+# Note: This section runs before aggressive memory clearing
 pair_df, clusters_rgb = None, None
-if "contrast_df" in st.session_state and not st.session_state["contrast_df"].empty:
+contrast_df_available = "contrast_df" in st.session_state and not st.session_state["contrast_df"].empty
+if contrast_df_available:
     try:
         pair_df, clusters_rgb = summarise_colour_pairs(st.session_state["contrast_df"])
     except Exception as e:
@@ -2881,13 +2878,17 @@ if show_heatmap:
         """)
         preview_container = st.container()
         _, col, _ = st.columns([0.15, 0.7, 0.15])
-        if st.session_state.get('text_blocks_by_page'):
+        text_blocks_by_page = st.session_state.get('text_blocks_by_page')
+        if text_blocks_by_page:
             preview_progress = st.progress(0, text="Generating previews...")
-            total_previews = len(st.session_state['text_blocks_by_page'])
-            for idx, (page_num, text_blocks) in enumerate(st.session_state['text_blocks_by_page'].items()):
+            total_previews = len(text_blocks_by_page)
+            for idx, (page_num, text_blocks) in enumerate(text_blocks_by_page.items()):
                 progress = (idx + 1) / total_previews
                 preview_progress.progress(progress, f"Generating preview {idx + 1} of {total_previews}")
-                temp_file_bytes = st.session_state.get('_temp_file_bytes', file_bytes)
+                temp_file_bytes = st.session_state.get('_temp_file_bytes')
+                if not temp_file_bytes:
+                    st.warning(f"⚠️ File data not available for page {page_num + 1} preview. Data was cleared to save memory.")
+                    continue
                 with fitz.open(stream=temp_file_bytes, filetype="pdf") as doc:
                     page = doc[page_num]
                     try:
@@ -2901,9 +2902,10 @@ if show_heatmap:
 with st.expander('Colour-pair summary table', expanded=True):
     st.subheader('Colour-pair summary table')
     
-    # Get summary data
+    # Get summary data (check if still available - may have been cleared)
     summary_df = None
-    if "contrast_df" in st.session_state and not st.session_state["contrast_df"].empty:
+    contrast_df_available = "contrast_df" in st.session_state and not st.session_state.get("contrast_df", pd.DataFrame()).empty
+    if contrast_df_available:
         summary_df, _ = summarise_colour_pairs(st.session_state["contrast_df"])
     
     # Filter options
@@ -2981,14 +2983,30 @@ with st.expander('Colour-pair summary table', expanded=True):
         st.info('No colour-pair statistics available. Please upload a PDF document to analyze.')
 
 # =====================================================================================
-# MEMORY CLEANUP: Clear detailed data after all UI has been rendered
+# AGGRESSIVE MEMORY CLEANUP: Clear detailed data after all UI has been rendered
 # =====================================================================================
-# After all reports, displays, and exports are generated, we can optionally
-# clear detailed data to free memory. The data is kept during the session for
-# user interaction, but will be automatically cleared when:
-# 1. A new file is uploaded (already implemented)
-# 2. User clicks "Clear All Analysis Data" button (already implemented)
-# 3. Session ends
-#
-# Note: We keep summary_stats (lightweight) for reference, but detailed
-# contrast_results, text_blocks_by_page, and contrast_df are cleared on new file upload.
+# CRITICAL: Clear all detailed data immediately after it's been used to prevent
+# Streamlit Cloud memory limit violations. This is essential for large PDFs.
+if st.session_state.get('_results_displayed', False):
+    # Clear all detailed analysis data - we've generated all reports and displayed results
+    # Only keep lightweight summary statistics
+    detailed_data_keys = [
+        'contrast_results',
+        'pdf_results',
+        'text_blocks_by_page',
+        'contrast_df',
+        '_temp_file_bytes',
+        '_results_displayed'
+    ]
+    for key in detailed_data_keys:
+        if key in st.session_state:
+            del st.session_state[key]
+    
+    # Force aggressive garbage collection
+    import gc
+    gc.collect()
+    gc.collect()
+    gc.collect()  # Third pass for stubborn references
+    
+    # Show info to user
+    st.info("💡 **Memory optimized**: Detailed data cleared. Upload the file again if you need to regenerate reports.")
