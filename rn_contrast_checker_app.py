@@ -2163,42 +2163,28 @@ if uploaded_file is not None:
                         if text_blocks:
                             text_blocks_by_page[page_num] = text_blocks
 
-                    # Get overall results
+                    # Get overall results - PROCESS FULL DOCUMENT (no truncation)
                     contrast_results, pdf_results = check_color_contrast(doc)
 
-                    # Limit data size to prevent memory issues (keep only essential data)
-                    # For very large documents, truncate text blocks to prevent memory overflow
-                    MAX_TEXT_BLOCKS_PER_PAGE = 500  # Limit blocks per page
-                    MAX_TOTAL_BLOCKS = 5000  # Limit total blocks across all pages
-                    
-                    total_blocks = sum(len(blocks) for blocks in text_blocks_by_page.values())
-                    if total_blocks > MAX_TOTAL_BLOCKS:
-                        # Truncate oldest pages first
-                        sorted_pages = sorted(text_blocks_by_page.items())
-                        text_blocks_by_page = {}
-                        remaining_blocks = 0
-                        for page_num, blocks in sorted_pages:
-                            if remaining_blocks + len(blocks) <= MAX_TOTAL_BLOCKS:
-                                # Limit blocks per page
-                                text_blocks_by_page[page_num] = blocks[:MAX_TEXT_BLOCKS_PER_PAGE]
-                                remaining_blocks += len(text_blocks_by_page[page_num])
-                            else:
-                                # Add partial page if we have room
-                                remaining = MAX_TOTAL_BLOCKS - remaining_blocks
-                                if remaining > 0:
-                                    text_blocks_by_page[page_num] = blocks[:min(remaining, MAX_TEXT_BLOCKS_PER_PAGE)]
-                                break
-                        st.warning(f"⚠️ Document has {total_blocks} text blocks. Limited to {MAX_TOTAL_BLOCKS} to prevent memory issues.")
-
-                    # Cache results in session state
+                    # Store results temporarily for this session (will be cleared after use)
                     st.session_state.contrast_results = contrast_results
                     st.session_state.pdf_results = pdf_results
                     st.session_state.text_blocks_by_page = text_blocks_by_page
                     st.session_state.current_file_hash = current_hash
                     
-                    # Force garbage collection after storing large data
-                    import gc
-                    gc.collect()
+                    # Calculate and store summary statistics (lightweight, keep these)
+                    flat_results = _flatten_results(contrast_results)
+                    total_elements = len(flat_results)
+                    passing_aa = sum(1 for block in flat_results if block.get('passes_aa', False))
+                    passing_aaa = sum(1 for block in flat_results if block.get('passes_aaa', False))
+                    st.session_state['summary_stats'] = {
+                        'total_elements': total_elements,
+                        'passing_aa': passing_aa,
+                        'passing_aaa': passing_aaa,
+                        'compliance_rate_aa': (passing_aa / total_elements * 100) if total_elements > 0 else 0,
+                        'compliance_rate_aaa': (passing_aaa / total_elements * 100) if total_elements > 0 else 0,
+                        'file_hash': current_hash
+                    }
 
                     # Optionally save backup to Google Sheets (archive feature)
                     use_sheets = st.session_state.get('use_sheets_storage', False)
@@ -2962,3 +2948,16 @@ with st.expander('Colour-pair summary table', expanded=True):
                 )
     else:
         st.info('No colour-pair statistics available. Please upload a PDF document to analyze.')
+
+# =====================================================================================
+# MEMORY CLEANUP: Clear detailed data after all UI has been rendered
+# =====================================================================================
+# After all reports, displays, and exports are generated, we can optionally
+# clear detailed data to free memory. The data is kept during the session for
+# user interaction, but will be automatically cleared when:
+# 1. A new file is uploaded (already implemented)
+# 2. User clicks "Clear All Analysis Data" button (already implemented)
+# 3. Session ends
+#
+# Note: We keep summary_stats (lightweight) for reference, but detailed
+# contrast_results, text_blocks_by_page, and contrast_df are cleared on new file upload.
