@@ -2084,6 +2084,10 @@ if uploaded_file is not None:
         # Validate PDF file
         is_valid, file_bytes, error_message = validate_pdf_file(uploaded_file)
         
+        # Store file_bytes in session state temporarily for heatmap generation
+        # We'll clear it after reports are generated
+        st.session_state['_temp_file_bytes'] = file_bytes
+        
         if not is_valid:
             st.error(error_message)
         else:
@@ -2284,19 +2288,24 @@ if uploaded_file is not None:
                     st.error("Contrast analysis must be run before generating heatmap.")
                 else:
                     try:
-                        # Open document just for heatmap generation
-                        with fitz.open(stream=file_bytes, filetype="pdf") as doc:
-                            heatmap_buffer = generate_heatmap_pdf(doc, text_blocks_by_page)
-                            if heatmap_buffer:
-                                with col2:
-                                    st.download_button(
-                                        "🎨 Download Heatmap PDF",
-                                        heatmap_buffer.getvalue(),
-                                        file_name="contrast_heatmap.pdf",
-                                        mime="application/pdf"
-                                    )
-                            else:
-                                st.warning("Heatmap PDF contained no overlay pages – likely no eligible text blocks were detected. Try toggling 'Show contrast heatmap overlay' and re-running the scan.")
+                        # Get file_bytes from session state (may have been cleared)
+                        temp_file_bytes = st.session_state.get('_temp_file_bytes')
+                        if not temp_file_bytes:
+                            st.error("File data not available for heatmap generation. Please re-upload the file.")
+                        else:
+                            # Open document just for heatmap generation
+                            with fitz.open(stream=temp_file_bytes, filetype="pdf") as doc:
+                                heatmap_buffer = generate_heatmap_pdf(doc, text_blocks_by_page)
+                                if heatmap_buffer:
+                                    with col2:
+                                        st.download_button(
+                                            "🎨 Download Heatmap PDF",
+                                            heatmap_buffer.getvalue(),
+                                            file_name="contrast_heatmap.pdf",
+                                            mime="application/pdf"
+                                        )
+                                else:
+                                    st.warning("Heatmap PDF contained no overlay pages – likely no eligible text blocks were detected. Try toggling 'Show contrast heatmap overlay' and re-running the scan.")
                     except Exception as heatmap_error:
                         st.error(f"Could not generate heatmap PDF: {str(heatmap_error)}")
 
@@ -2309,6 +2318,20 @@ if uploaded_file is not None:
 
             # Display contrast results
             display_results(contrast_results, pdf_results)
+            
+            # After all reports and displays are done, aggressively clear memory
+            # Clear the large file_bytes from session state (we've processed everything we need)
+            if '_temp_file_bytes' in st.session_state:
+                del st.session_state['_temp_file_bytes']
+            
+            # Force aggressive garbage collection after processing
+            import gc
+            gc.collect()
+            gc.collect()
+            
+            # Note: We keep contrast_results, pdf_results, text_blocks_by_page, and contrast_df
+            # in session state for user interaction (viewing, re-downloading reports, etc.)
+            # These are cleared automatically when a new file is uploaded or user clicks clear button
 
             # -------------------- Debug download (page-1 results) ---------------------
             try:
@@ -2321,7 +2344,8 @@ if uploaded_file is not None:
                 # -------------------------------------------------------------
                 raw_page1_info = {}
                 try:
-                    with fitz.open(stream=file_bytes, filetype="pdf") as _doc_dbg:
+                    temp_file_bytes = st.session_state.get('_temp_file_bytes', file_bytes)
+                    with fitz.open(stream=temp_file_bytes, filetype="pdf") as _doc_dbg:
                         if len(_doc_dbg) >= 1:
                             p0 = _doc_dbg[0]
 
@@ -2428,7 +2452,8 @@ if uploaded_file is not None:
                     if outlined_bytes_differs:
                         # Extract first page from *processed* bytes so we get
                         # the outlined shapes.
-                        with fitz.open(stream=file_bytes, filetype="pdf") as _doc_proc:
+                        temp_file_bytes = st.session_state.get('_temp_file_bytes', file_bytes)
+                        with fitz.open(stream=temp_file_bytes, filetype="pdf") as _doc_proc:
                             single_page_doc = fitz.open()
                             single_page_doc.insert_pdf(_doc_proc, from_page=0, to_page=0)
                             buf = io.BytesIO()
@@ -2862,7 +2887,8 @@ if show_heatmap:
             for idx, (page_num, text_blocks) in enumerate(st.session_state['text_blocks_by_page'].items()):
                 progress = (idx + 1) / total_previews
                 preview_progress.progress(progress, f"Generating preview {idx + 1} of {total_previews}")
-                with fitz.open(stream=file_bytes, filetype="pdf") as doc:
+                temp_file_bytes = st.session_state.get('_temp_file_bytes', file_bytes)
+                with fitz.open(stream=temp_file_bytes, filetype="pdf") as doc:
                     page = doc[page_num]
                     try:
                         overlay_image = create_contrast_overlay(page, text_blocks)
