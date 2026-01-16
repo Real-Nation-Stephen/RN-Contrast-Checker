@@ -523,7 +523,12 @@ def save_results_to_sheets(contrast_results, pdf_results, file_hash, user_email=
             # Other errors - just return False without disabling
             return False
         
-        worksheet_name = f"Results_{file_hash[:8]}"
+        # Include user email and timestamp in worksheet name to prevent collisions
+        # when multiple users process files simultaneously
+        user_id = user_email.split('@')[0] if user_email else 'user'
+        import time
+        timestamp = int(time.time())
+        worksheet_name = f"Results_{user_id}_{file_hash[:8]}_{timestamp}"
         try:
             worksheet = sheet.worksheet(worksheet_name)
             worksheet.clear()
