@@ -2848,7 +2848,9 @@ def _rgb_float_to_int(rgb_f):
 # Generate colour-pair summary table for download (CSV)
 # Note: This section runs before aggressive memory clearing
 pair_df, clusters_rgb = None, None
-contrast_df_available = "contrast_df" in st.session_state and not st.session_state["contrast_df"].empty
+contrast_df_available = ("contrast_df" in st.session_state and 
+                        st.session_state.get("contrast_df") is not None and
+                        not st.session_state["contrast_df"].empty)
 if contrast_df_available:
     try:
         pair_df, clusters_rgb = summarise_colour_pairs(st.session_state["contrast_df"])
